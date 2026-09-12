@@ -8,10 +8,9 @@ This repository does not contain an application. It contains the **blueprint** f
 ┌──────────────────────────────────────────────────────────────┐
 │  What it builds:                                             │
 │                                                              │
-│  Hold Ctrl+Alt ......... speak your primary language         │
+│  Hold Ctrl+Super ....... speak your primary language         │
 │  Hold Ctrl+Shift ....... speak your second language          │
-│  Hold Ctrl+Super ....... say how to rewrite your selection   │
-│  Ctrl+Alt+Z ............ undo the last insertion             │
+│  Double-tap either ..... latch it and keep talking           │
 │                                                              │
 │  Text lands at the caret, in any X11 application,            │
 │  about 450 ms after you stop talking.                        │
@@ -35,8 +34,8 @@ You can also just read it. It is written to be understood, not only executed.
 ## What the resulting tool does
 
 - **System-wide dictation.** Terminal, editor, browser, chat client — anywhere you can paste.
-- **Two languages, two keys.** A different chord for each. No mode switching, no auto-detect guessing wrong on a short sentence.
-- **Command mode.** Select text with the mouse, hold a chord, say *"make this more formal"* — the selection is rewritten in place.
+- **Two languages, two keys.** A different chord for each — and only two, deliberately. No mode switching, no auto-detect guessing wrong on a short sentence.
+- **Hands-free latch.** Double-tap either chord and it keeps recording until you tap again, for the passages you don't want to hold a key through.
 - **Live caption** while you speak, so you know the microphone is working before you finish the sentence.
 - **Context-aware cleanup.** A small LLM strips fillers and false starts, matching its tone to the app you are dictating into — terse in a terminal, complete sentences in an email client. Deadline-bounded to 1.2 s and skipped entirely for short phrases.
 - **Personal dictionary** for your jargon, project names and acronyms.
@@ -50,7 +49,7 @@ You can also just read it. It is written to be understood, not only executed.
 
 Because the spec is the part that was actually hard.
 
-Anyone can wire up a speech-to-text API. What takes weeks is discovering that voice-activity detection has to run *before* gain or it classifies your noise floor as speech; that a silent clip sent to a speech model returns a confident sentence nobody said; that `xclip` forks a child which takes clipboard ownership *after* the parent exits, so you have to poll before pasting; that Tk blocks Python's signal handlers until you give it a heartbeat; that right Alt is AltGr on most of the world's keyboard layouts and must be excluded from every chord.
+Anyone can wire up a speech-to-text API. What takes weeks is discovering that voice-activity detection has to run *before* gain or it classifies your noise floor as speech; that a silent clip sent to a speech model returns a confident sentence nobody said; that `xclip` forks a child which takes clipboard ownership *after* the parent exits, so you have to poll before pasting; that Tk blocks Python's signal handlers until you give it a heartbeat; that right Alt is AltGr on most of the world's keyboard layouts and must be excluded from every chord; that an undo key bound to a letter fires hundreds of times under autorepeat and succeeds twice.
 
 All of that is in here, each with the symptom that led to it. A code dump would hide those decisions inside implementation. A specification makes them the point.
 
@@ -62,7 +61,7 @@ All of that is in here, each with the symptom that led to it. A code dump would 
 | Architecture | data flow diagram, and the key design decisions with rejected alternatives |
 | Constants | every tuned value, with the empirical basis for the ones that were measured |
 | Stack | each dependency, its exact role, and the one version pin that matters |
-| Functional spec | hotkeys, audio pipeline, speech-to-text routing, dictionary, cleanup prompts (verbatim), injection, undo, overlay, captions, history |
+| Functional spec | hotkeys and latch, audio pipeline, speech-to-text routing, dictionary, cleanup prompts (verbatim), injection, overlay, captions, history |
 | Build phases | 0-9, starting with a mandatory environment gate that halts on Wayland |
 | Edge cases | 24 boundary conditions and their exact handling |
 | Verification | 18-point checklist to confirm the build actually works |

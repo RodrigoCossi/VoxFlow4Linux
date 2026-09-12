@@ -70,8 +70,8 @@ rebind.
 | **Fully local** | `faster-whisper` only; never contacts a network service | 3-10 s on CPU, <1 s on GPU | none | nothing leaves the machine |
 
 If the user picks **fully local**, set `stt.provider: local` and `formatting.enabled: false` in the
-config, skip the API-key step entirely, and warn them that Command Mode (spoken instructions
-applied to selected text) requires an LLM and will be unavailable. Everything else works.
+config, skip the API-key step entirely, and tell them the transcript is pasted exactly as the
+local model returns it — there is no LLM cleanup pass. Everything else works.
 
 If the user picks **cloud**, walk them through getting a key:
 
@@ -92,8 +92,13 @@ building, put it in `.env` and do not echo it back.
 
 ### A4. Which hotkey chords?
 
-> **ASK:** "Default chords are **Ctrl+Alt** (primary language), **Ctrl+Shift** (secondary),
-> **Ctrl+Super** (command mode) and **Ctrl+Alt+Z** (undo). Keep them, or change any?"
+> **ASK:** "There are exactly two chords: **Ctrl+Super** for your primary language and
+> **Ctrl+Shift** for your secondary. Hold one to dictate; double-tap either to latch it hands-free.
+> Keep them, or swap them for something else?"
+
+**Do not offer a third chord, and do not offer an undo key.** Both existed in an earlier build and
+were removed deliberately — the evidence is in *Hotkeys and modes*. Two chords is the design, not a
+starting point.
 
 Two conflicts to check for *before* accepting the defaults, and to raise with the user if found:
 
@@ -101,7 +106,8 @@ Two conflicts to check for *before* accepting the defaults, and to raise with th
   with `pgrep -x ibus-daemon || pgrep -x fcitx5 || pgrep -x fcitx`. If present, propose
   `ctrl+super_shift` for the secondary chord instead. The setup script automates this.
 - **`Ctrl+Super`** is grabbed by some desktop environments for window tiling or an overview. If
-  `xev` shows the key never reaching applications, propose `ctrl+alt+shift` instead.
+  `xev` shows the key never reaching applications, propose `ctrl+alt` for the primary chord
+  instead — nothing in VoxFlow uses Alt, so that combination is free.
 
 ### A5. Live caption?
 
@@ -231,7 +237,6 @@ user's `config.yaml`. Values carrying a *Why* note were tuned empirically — do
 | `PASTE_SETTLE_MS` | `60` | pause after `windowactivate --sync` before sending the chord |
 | `FAST_PATH_MAX_WORDS` | `12` | at or below this, skip the LLM entirely |
 | `WHISPER_PROMPT_MAX_CHARS` | `880` | Whisper's prompt window is ~224 tokens |
-| `UNDO_MAX_CHARS` | `2000` | longer injections are not undoable |
 | `OVERLAY_WIDTH` / `OVERLAY_HEIGHT` | `280` / `14` | collapsed bar strip, px |
 | `PREVIEW_WIDTH` / `PREVIEW_HEIGHT` | `720` / `66` | expanded caption strip, px |
 | `BARS_ROW` | `12` | px reserved for the waveform inside the caption |
@@ -322,26 +327,55 @@ user's `config.yaml`. Values carrying a *Why* note were tuned empirically — do
 
 | Chord | Mode | Behavior |
 |-------|------|----------|
-| **Ctrl + Alt** (hold) | `primary` | dictate in the primary language |
+| **Ctrl + Super** (hold) | `primary` | dictate in the primary language |
 | **Ctrl + Shift** (hold) | `secondary` | dictate in the secondary language |
-| **Ctrl + Super** (hold) | `command` | the spoken text is an *instruction* applied to the current X11 PRIMARY selection |
-| **Ctrl + Alt** double-tap | latch | keeps recording after release; tap again to stop |
-| **Ctrl + Alt + Z** | undo | backspaces the last injection |
+| either chord, double-tap | latch | keeps recording after release; tap the same chord again to stop |
+
+**There are exactly two modes.** Alt is not used by VoxFlow at all, which leaves Ctrl+Alt free for
+the desktop and for whatever the user has already bound there.
+
+> **Why only two — this is a removal, not an omission.** An earlier build shipped two further
+> bindings: a `command` mode (speak an instruction, an LLM rewrites the X11 PRIMARY selection) and
+> an undo key on Ctrl+Alt+Z. Both were cut after three days of logged real use, and the cut is
+> deliberate.
+>
+> *Command mode was never used in real work.* The habit it was built for does not survive a tool
+> this fast — selecting the text and simply re-dictating the replacement is quicker than describing
+> the edit, which makes an LLM rewrite path redundant.
+>
+> *Undo fired 347 times and succeeded 3.* Key autorepeat re-triggered it continuously while the key
+> was held, and the first success cleared the "last injection" state, so every repeat after it
+> logged "nothing to undo". It also collided with its own chord: holding Ctrl+Alt engaged a
+> primary-language recording that the undo handler then had to cancel.
+>
+> Do not reinstate either as a missing feature. An undo that comes back needs an autorepeat guard
+> first, and a rewrite mode needs evidence that somebody wants it.
 
 A chord engages only when the set of physically held modifiers **equals** the chord exactly — no
-extra modifier. It releases as soon as any of its keys goes up. Ctrl+Alt+Shift therefore engages
+extra modifier. It releases as soon as any of its keys goes up. Ctrl+Shift+Super therefore engages
 nothing, so the user can pass through it while moving between chords.
 
-**Left Alt is required; `Alt_R` / AltGr / `ISO_Level3_Shift` are excluded from the `alt` set.**
+**`Alt_R` / AltGr / `ISO_Level3_Shift` are excluded from the `alt` set.**
 
 > **Why:** Right Alt is AltGr on most non-US layouts (ABNT2, US-International, and most European
-> layouts). If AltGr counted as `alt`, holding Ctrl+AltGr while typing would both engage dictation
-> and emit stray accented characters into the user's document. AltGr is ignored entirely.
+> layouts). Excluding it means holding Ctrl+AltGr while typing can never count as a modifier that
+> blocks a chord or emits stray accented characters. With no chord using Alt this is now defensive
+> rather than load-bearing — keep it anyway, because any future Alt chord would reintroduce the
+> hazard.
 
-**Latch:** a `primary` chord held for ≤ `latch_double_tap_ms` (400 ms) and released records a tap
-timestamp. If a new `primary` engage arrives within 400 ms of it, recording starts *latched* and
+**Duplicate chords are rejected at construction.** Chords match on an exact modifier set and the
+first hit wins, so two modes sharing a chord would silently shadow whichever was built later. The
+constructor logs an error naming both modes and drops the duplicate.
+
+**Latch:** a chord held for ≤ `latch_double_tap_ms` (400 ms) and released records a tap timestamp.
+If a new engage of **the same chord** arrives within 400 ms of it, recording starts *latched* and
 ignores the release; the next engage stops it, and that engage's release is consumed rather than
-treated as a new stop.
+treated as a new stop. Tap timestamps live in a **per-mode dict**, so a quick tap of one chord can
+never latch the other.
+
+**Input-method conflict:** if `ibus-daemon`, `fcitx` or `fcitx5` is running, Ctrl+Shift cycles input
+methods and is unusable as a chord. `setup.sh` detects this and rewrites the secondary chord to
+`ctrl+super_shift`, with a printed warning.
 
 ### Recording
 
@@ -509,31 +543,6 @@ must never be blocked by the cleanup step.
 > distortion is worse than clumsy output because the speaker cannot see it happen. Benchmark
 > candidates on at least 10 real samples, not 2.
 
-### Command mode
-
-The spoken text is an instruction applied to the current PRIMARY selection (select text with the
-mouse first). Deadline is `max(formatting.timeout_ms, 4000) ms` — a rewrite is a bigger job than a
-cleanup. With no selection or no LLM available, play the error blip and inject nothing.
-
-**System prompt (verbatim):**
-
-```
-You rewrite text according to a spoken instruction. You receive SELECTED TEXT and an
-INSTRUCTION. Apply the instruction to the selected text and return only the resulting
-text. Never answer the instruction as a question. Never explain what you changed.
-Never add markdown code fences. Your output replaces the selected text verbatim.
-```
-
-**User prompt template (verbatim):**
-
-```
-SELECTED TEXT:
-{selection}
-
-INSTRUCTION (transcribed from speech, may contain minor errors):
-{transcript}
-```
-
 ### Window context and categories
 
 Best-effort, 300 ms timeout per command, degrading to empty strings — context must never block or
@@ -571,8 +580,8 @@ Serialized under a lock. In order:
 8. Show the overlay again (it re-hides itself unless still recording).
 
 > **Why wait for modifiers:** the user is often still holding the chord when the transcript
-> arrives. Sending Ctrl+V while Alt is physically down produces Ctrl+Alt+V, a different shortcut in
-> many applications.
+> arrives. Sending Ctrl+V while Super is physically down produces Ctrl+Super+V — a different
+> shortcut, and one many window managers swallow before the application ever sees it.
 
 > **⚠️ `xclip -i` must not have its stdout captured — the call hangs.** `xclip` forks a background
 > child that owns the selection; capturing stdout holds the pipe open forever. Use
@@ -581,16 +590,6 @@ Serialized under a lock. In order:
 > **⚠️ `xclip`'s parent exits before the child owns the selection.** Setting the clipboard is not
 > synchronous. After writing, poll `xclip -o` every 10 ms for up to 250 ms until the content reads
 > back correctly, or the paste sometimes delivers the *previous* clipboard.
-
-### Undo
-
-Sends `xdotool key --clearmodifiers --repeat <n> --repeat-delay 4 BackSpace`, where `n` is the
-character count of the last injection. Refused when nothing has been injected, when the last
-injection exceeded 2000 characters, or when focus has moved to a different window since. If pressed
-while recording, the recording is cancelled first.
-
-> **Documented limitation, deliberately not half-guarded:** if the user typed after the injection,
-> that typing is deleted too. There is no reliable X11 way to detect it.
 
 ### Overlay
 
@@ -837,10 +836,8 @@ languages:
     name: Spanish
 
 hotkeys:
-  primary: "ctrl+alt"
+  primary: "ctrl+super"
   secondary: "ctrl+shift"
-  command: "ctrl+super"
-  undo: "ctrl+alt+z"
   latch_double_tap_ms: 400
 
 stt:
@@ -935,9 +932,11 @@ SUPER   = ["Super_L", "Super_R"]
 `parse_chord` maps `_` to `+` before splitting, so `"ctrl+super_shift"` parses as
 `{ctrl, super, shift}` — this lets a three-modifier chord be written in YAML without quoting issues.
 
-> **⚠️ Ctrl+Z arrives as `'\x1a'` on some keyboard backends.** When a key's `char` is a single
-> control character, add 96 to its ordinal to recover the letter; fall back to the virtual key code
-> when `char` is `None`.
+> **⚠️ Only relevant if you add a letter-key chord — none ship by default.** A letter pressed with
+> Ctrl arrives as a control character on some keyboard backends (`Ctrl+Z` as `'\x1a'`). When a
+> key's `char` is a single control character, add 96 to its ordinal to recover the letter; fall
+> back to the virtual key code when `char` is `None`. Both shipped chords are modifier-only, so
+> this path stays dormant.
 
 ### Phase 7 — Overlay, sound, history, caption
 
@@ -1023,8 +1022,6 @@ substituted for the real absolute path.
 | `xclip` missing | fall back to synthetic typing | |
 | Clipboard set does not verify in 250 ms | log a warning and paste anyway | |
 | Previous clipboard was not valid UTF-8 | do not restore it; log | restoring binary data through xclip corrupts it |
-| Undo with focus moved / over 2000 chars | refused, logged | |
-| Undo pressed while recording | cancel the recording first | |
 | Second dictation while the first is processing | allowed, up to 2 workers; results inject in completion order | |
 | Second instance launched | prints the running PID and exits 0 | |
 | Capture opens but delivers all zeros | the check script detects it and switches the backend | there is no error to catch |
@@ -1059,7 +1056,7 @@ $PROJECT_ROOT/
     ├── format.py                    # fast path, prompts, LLM call, output cleanup
     ├── dictionary.py                # variants + fuzzy substitution
     ├── context.py                   # active-window snapshot, categories
-    ├── inject.py                    # modifier guard, refocus, paste, undo
+    ├── inject.py                    # modifier guard, refocus, paste
     ├── hotkeys.py                   # chords + keymap poller
     ├── overlay.py                   # Tk strip / caption
     ├── preview.py                   # streaming + chunked caption engines
@@ -1092,10 +1089,11 @@ $DATA_DIR/  (~/.local/share/voxflow)
       appears at the caret within about a second.
 - [ ] Hold the secondary chord and speak the second language — the result is in that language, not
       translated.
-- [ ] Select a sentence with the mouse, hold the command chord, say "make this more formal" — the
-      selection is replaced by the rewrite.
-- [ ] Undo immediately after an injection removes exactly the injected characters.
 - [ ] Double-tap the primary chord — recording continues hands-free; a single tap stops it.
+- [ ] Double-tap the secondary chord — the same latch works there.
+- [ ] Tap the primary chord once, then immediately tap the secondary — the second starts a normal
+      held recording, *not* a latched one (tap timestamps are per mode).
+- [ ] Hold Ctrl+Alt — nothing happens; that chord is unbound.
 - [ ] Hold Ctrl + **right** Alt and type — no recording starts and no stray accented characters are
       emitted.
 - [ ] Nothing is visible on screen between dictations — no idle strip, no ghost rectangle.
@@ -1120,7 +1118,8 @@ State these to the user rather than silently building around them:
 - **No `/dev/input` / evdev.** Requires elevated privileges and breaks under remote desktop.
 - **Audio is never written to disk**, at any stage, including the caption path.
 - **The live caption is never injected.** Only the final transcript is pasted.
-- **Undo does not guard against typing after an injection.** Documented, not detected.
+- **No undo key and no command/rewrite mode.** Both were built, measured in daily use and removed;
+  see *Hotkeys and modes* for the numbers. Do not add them back as missing features.
 - **No always-listening / wake-word mode.** Push-to-talk is the whole security model: the
   microphone is open only while a key is physically held.
 
